@@ -1,4 +1,6 @@
 ### node modules
 /node_modules/*
 ###database
-/config/Database.js
+/config/*
+
+.env

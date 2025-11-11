@@ -29,7 +29,10 @@ import {
   getMonthlyCostsPerUser,
   getProjectUsersMonthlyHours, 
   getProjectManagersWithProjects,
-  getUserExpectedVsSubmittedHours 
+  getUserExpectedVsSubmittedHours,
+  getUserRateHistory ,
+  updateUserRate,
+  createUserRate
 } from "../controllers/Queries.js"
 
 import { verifyUser,adminOnly } from "../middleware/AuthUser.js";
@@ -81,6 +84,10 @@ router.get('/active-count', verifyUser,adminOnly, getTotalActiveUsers);
 router.get('/active-count-project',  verifyUser,adminOnly,getTotalActiveProjects);
 router.get('/projects/total-users',  verifyUser,adminOnly,getTotalUsersInProject);
 router.get('/dayoff-hourly-rates', verifyUser,adminOnly, getDayoffUsersWithRate);
+router.get('/rates/:userid', verifyUser,adminOnly, getUserRateHistory);
+router.patch('/rates', verifyUser,adminOnly, updateUserRate);
+router.post('/rates', verifyUser, adminOnly, createUserRate);
+
 
 router.patch('/update-hourly-rate', verifyUser,adminOnly, updateKimaiDaysOff)
 router.get('/project-users-hourly-costs', verifyUser,adminOnly, getProjectUsersWithHourlyRate);
@@ -89,6 +96,7 @@ router.get('/projects/budget', verifyUser,adminOnly, getProjectBudget);
 router.get('/project-users-monthly-costs', verifyUser,adminOnly, getMonthlyCostsPerUser);
 router.get('/project-users-monthly-hours', verifyUser,adminOnly, getProjectUsersMonthlyHours);
 router.get('/stack-bar', verifyUser,adminOnly, getProjectManagersWithProjects)
+
 
 
 

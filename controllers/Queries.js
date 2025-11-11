@@ -828,29 +828,140 @@ export const getTotalUsersInProject = async (req, res) => {
   }
 };
 
+// export const getDayoffUsersWithRate = async (req, res) => {
+//   try {
+//     const results = await runQuery(`
+//       SELECT 
+//         d.user_id,
+//         u.alias AS username,
+//         d.hourly_rate
+//       FROM kimai2_daysoff d
+//       JOIN kimai2_users u ON d.user_id = u.id
+//     `, []);
+
+//     console.log("✅ Dayoff query results:", results);
+
+//     if (!results) {
+//       console.warn("⚠️ WARNING: results is null or undefined");
+//     }
+
+//     res.status(200).json(results);
+//   } catch (error) {
+//     console.error("❌ Error fetching dayoff users and hourly rates:", error);
+//     res.status(500).json({ error: "Internal Server Error" });
+//   }
+// };
+
 export const getDayoffUsersWithRate = async (req, res) => {
   try {
-    const results = await runQuery(`
+    const rows = await runQuery(
+      `
       SELECT 
-        d.user_id,
+        u.id AS user_id,
         u.alias AS username,
-        d.hourly_rate
-      FROM kimai2_daysoff d
-      JOIN kimai2_users u ON d.user_id = u.id
-    `, []);
+        u.avatar AS avatar,
+        r.hourly_rate,
+        r.effective_from
+      FROM kimai2_users u
+      LEFT JOIN (
+        SELECT r1.user_id, r1.hourly_rate, r1.effective_from
+        FROM kimai2_user_rates r1
+        JOIN (
+          SELECT user_id, MAX(effective_from) AS max_eff
+          FROM kimai2_user_rates
+          GROUP BY user_id
+        ) m 
+          ON m.user_id = r1.user_id 
+         AND m.max_eff = r1.effective_from
+      ) r ON r.user_id = u.id
+      WHERE u.enabled = 1
+      ORDER BY u.alias
+      `
+    );
 
-    console.log("✅ Dayoff query results:", results);
+    const result = rows.map(r => ({
+      user_id: r.user_id,
+      username: r.username,
+      avatar: r.avatar,
+      hourly_rate: r.hourly_rate ? Number(r.hourly_rate) : 0,
+      effective_from: r.effective_from,
+    }));
 
-    if (!results) {
-      console.warn("⚠️ WARNING: results is null or undefined");
-    }
-
-    res.status(200).json(results);
-  } catch (error) {
-    console.error("❌ Error fetching dayoff users and hourly rates:", error);
-    res.status(500).json({ error: "Internal Server Error" });
+    res.json(result);
+  } catch (err) {
+    console.error("Error fetching users' current rates:", err);
+    res.status(500).json({ error: "Database error" });
   }
 };
+
+export const getUserRateHistory = async (req, res) => {
+  const userid  = req.params.userid;
+
+  if (!userid) {
+    return res.status(400).json({ error: "Missing userId" });
+  }
+
+  try {
+    const rows = await runQuery(
+      `
+      SELECT 
+        r.user_id,
+        u.alias AS username,
+        r.effective_from,
+        r.hourly_rate
+      FROM kimai2_user_rates r
+      LEFT JOIN kimai2_users u ON u.id = r.user_id
+      WHERE r.user_id = ?
+      ORDER BY r.effective_from DESC
+      `,
+      [userid]
+    );
+
+    // normalize numeric types
+    const result = rows.map(r => ({
+      user_id: r.user_id,
+      username: r.username,
+      effective_from: r.effective_from,           // 'YYYY-MM-DD'
+      hourly_rate: r.hourly_rate != null ? Number(r.hourly_rate) : null,
+    }));
+
+    res.json(result);
+  } catch (err) {
+    console.error("Error fetching user rate history:", err);
+    res.status(500).json({ error: "Database error" });
+  }
+};
+
+export const updateUserRate = async (req, res) => {
+  const { userId, effective_from, hourly_rate } = req.body;
+
+  if (!userId || !effective_from || hourly_rate == null) {
+    return res.status(400).json({ error: "userId, effective_from and hourly_rate are required" });
+  }
+  const rate = Number(hourly_rate);
+  if (Number.isNaN(rate) || rate < 0) {
+    return res.status(400).json({ error: "hourly_rate must be a non-negative number" });
+  }
+
+  try {
+    await runQuery2(
+      `
+      UPDATE kimai2_user_rates
+      SET hourly_rate = ?
+      WHERE user_id = ? AND effective_from = ?
+      `,
+      [rate, userId, effective_from]
+    );
+
+    // If you want to detect "not found", you can inspect the metadata from sequelize.query.
+    // For simplicity, we return ok=true.
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Error updating user rate:", err);
+    return res.status(500).json({ error: "Database update failed" });
+  }
+};
+
 
 // export const updateKimaiDaysOff = async(req,res) =>
 // {
@@ -892,37 +1003,87 @@ export const updateKimaiDaysOff = async (req, res) => {
   }
 };
 
+// export const getProjectUsersWithHourlyRate = async (req, res) => {
+//   const { projectName, startdate, enddate } = req.query;
+
+//   try {
+//     const rows = await runQuery(
+//       `SELECT 
+//          u.alias AS username,
+//          SUM(t.duration) AS total_duration,
+//          d.hourly_rate
+//        FROM kimai2_timesheet t
+//        JOIN kimai2_users u ON t.user = u.id
+//        JOIN kimai2_projects p ON t.project_id = p.id
+//        LEFT JOIN kimai2_daysoff d ON d.user_id = u.id
+//        WHERE p.name = ? AND t.start_time BETWEEN ? AND ?
+//        GROUP BY u.id`,
+//       [projectName, startdate, enddate]
+//     );
+
+//     const result = rows.map(row => ({
+//       username: row.username,
+//       hours: row.total_duration / 3600,
+//       hourly_rate: parseFloat(row.hourly_rate || 0),
+//       total_cost: (row.total_duration / 3600) * parseFloat(row.hourly_rate || 0)
+//     }));
+
+//     res.json(result);
+//   } catch (err) {
+//     console.error(err);
+//     res.status(500).json({ error: 'Database error' });
+//   }
+// };
 export const getProjectUsersWithHourlyRate = async (req, res) => {
   const { projectName, startdate, enddate } = req.query;
 
+  if (!projectName || !startdate || !enddate) {
+    return res.status(400).json({ error: "Missing parameters" });
+  }
+
   try {
     const rows = await runQuery(
-      `SELECT 
-         u.alias AS username,
-         SUM(t.duration) AS total_duration,
-         d.hourly_rate
-       FROM kimai2_timesheet t
-       JOIN kimai2_users u ON t.user = u.id
-       JOIN kimai2_projects p ON t.project_id = p.id
-       LEFT JOIN kimai2_daysoff d ON d.user_id = u.id
-       WHERE p.name = ? AND t.start_time BETWEEN ? AND ?
-       GROUP BY u.id`,
+      `
+      SELECT 
+        u.alias AS username,
+        SUM(t.duration) / 3600 AS hours,
+        SUM(
+          (t.duration / 3600) *
+          IFNULL((
+            SELECT r.hourly_rate
+            FROM kimai2_user_rates r
+            WHERE r.user_id = t.\`user\`
+              AND r.effective_from <= DATE(t.start_time)
+            ORDER BY r.effective_from DESC
+            LIMIT 1
+          ), 0)
+        ) AS total_cost
+      FROM kimai2_timesheet t
+      JOIN kimai2_users u    ON u.id = t.\`user\`
+      JOIN kimai2_projects p ON p.id = t.project_id
+      WHERE p.name = ?
+        AND t.start_time >= ?
+        AND t.start_time <  ?
+      GROUP BY u.id, u.alias
+      ORDER BY u.alias
+      `,
       [projectName, startdate, enddate]
     );
 
-    const result = rows.map(row => ({
-      username: row.username,
-      hours: row.total_duration / 3600,
-      hourly_rate: parseFloat(row.hourly_rate || 0),
-      total_cost: (row.total_duration / 3600) * parseFloat(row.hourly_rate || 0)
+    // normalize numbers; optionally round as you wish
+    const result = rows.map(r => ({
+      username: r.username,
+      hours: Number(r.hours),            // or: Math.round(r.hours * 100) / 100
+      total_cost: Number(r.total_cost),  // or: Math.round(r.total_cost * 100) / 100
     }));
 
     res.json(result);
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Database error' });
+    console.error("Error fetching project users hourly costs:", err);
+    res.status(500).json({ error: "Database error" });
   }
 };
+
 
 // controller/timesheets.js
 
@@ -976,8 +1137,6 @@ export const getProjectBudget = async (req, res) => {
 };
 
 
-
-
 export const getMonthlyCostsPerUser = async (req, res) => {
   const { projectName, year } = req.query;
 
@@ -986,33 +1145,47 @@ export const getMonthlyCostsPerUser = async (req, res) => {
   }
 
   try {
-    const rows = await runQuery(`
+    const rows = await runQuery(
+      `
       SELECT 
         u.alias,
         MONTH(t.start_time) AS month,
+        -- total hours in the month (for reference if you need it later)
         SUM(TIMESTAMPDIFF(SECOND, t.start_time, t.end_time)) / 3600 AS hours,
-        COALESCE(d.hourly_rate, 0) AS hourly_rate,
-        (SUM(TIMESTAMPDIFF(SECOND, t.start_time, t.end_time)) / 3600) * COALESCE(d.hourly_rate, 0) AS cost
+        -- time-aware monthly cost
+        SUM(
+          (TIMESTAMPDIFF(SECOND, t.start_time, t.end_time) / 3600) *
+          IFNULL((
+            SELECT r.hourly_rate
+            FROM kimai2_user_rates r
+            WHERE r.user_id = t.\`user\`
+              AND r.effective_from <= DATE(t.start_time)
+            ORDER BY r.effective_from DESC
+            LIMIT 1
+          ), 0)
+        ) AS cost
       FROM kimai2_timesheet t
-      JOIN kimai2_users u ON u.id = t.user
-      LEFT JOIN kimai2_daysoff d ON d.user_id = u.id
+      JOIN kimai2_users u    ON u.id = t.\`user\`
       JOIN kimai2_projects p ON p.id = t.project_id
-      WHERE p.name = ? AND YEAR(t.start_time) = ?
-      GROUP BY u.alias, month
+      WHERE p.name = ? 
+        AND YEAR(t.start_time) = ?
+      GROUP BY u.id, u.alias, month
       ORDER BY u.alias, month
-    `, [projectName, year]);
+      `,
+      [projectName, year]
+    );
 
-    // Organize data by user
-    const result = {};
-    for (let row of rows) {
+    // Build: [{ alias, monthly_costs: [12 numbers] }]
+    const resultByUser = {};
+    for (const row of rows) {
       const { alias, month, cost } = row;
-      if (!result[alias]) {
-        result[alias] = new Array(12).fill(0);
+      if (!resultByUser[alias]) {
+        resultByUser[alias] = new Array(12).fill(0);
       }
-      result[alias][month - 1] = cost;
+      resultByUser[alias][Number(month) - 1] = Number(cost) || 0;
     }
 
-    const formatted = Object.entries(result).map(([alias, monthly_costs]) => ({
+    const formatted = Object.entries(resultByUser).map(([alias, monthly_costs]) => ({
       alias,
       monthly_costs,
     }));
@@ -1023,6 +1196,53 @@ export const getMonthlyCostsPerUser = async (req, res) => {
     res.status(500).json({ error: "Database error" });
   }
 };
+
+
+// export const getMonthlyCostsPerUser = async (req, res) => {
+//   const { projectName, year } = req.query;
+
+//   if (!projectName || !year) {
+//     return res.status(400).json({ error: "Missing projectName or year" });
+//   }
+
+//   try {
+//     const rows = await runQuery(`
+//       SELECT 
+//         u.alias,
+//         MONTH(t.start_time) AS month,
+//         SUM(TIMESTAMPDIFF(SECOND, t.start_time, t.end_time)) / 3600 AS hours,
+//         COALESCE(d.hourly_rate, 0) AS hourly_rate,
+//         (SUM(TIMESTAMPDIFF(SECOND, t.start_time, t.end_time)) / 3600) * COALESCE(d.hourly_rate, 0) AS cost
+//       FROM kimai2_timesheet t
+//       JOIN kimai2_users u ON u.id = t.user
+//       LEFT JOIN kimai2_daysoff d ON d.user_id = u.id
+//       JOIN kimai2_projects p ON p.id = t.project_id
+//       WHERE p.name = ? AND YEAR(t.start_time) = ?
+//       GROUP BY u.alias, month
+//       ORDER BY u.alias, month
+//     `, [projectName, year]);
+
+//     // Organize data by user
+//     const result = {};
+//     for (let row of rows) {
+//       const { alias, month, cost } = row;
+//       if (!result[alias]) {
+//         result[alias] = new Array(12).fill(0);
+//       }
+//       result[alias][month - 1] = cost;
+//     }
+
+//     const formatted = Object.entries(result).map(([alias, monthly_costs]) => ({
+//       alias,
+//       monthly_costs,
+//     }));
+
+//     res.json(formatted);
+//   } catch (error) {
+//     console.error("Error fetching monthly user costs:", error);
+//     res.status(500).json({ error: "Database error" });
+//   }
+// };
 
 // export const getProjectUsersMonthlyHours = async (req, res) => {
 //   const { projectName, year } = req.query;
@@ -1231,6 +1451,35 @@ export const getUserExpectedVsSubmittedHours = async (req, res) => {
   } catch (error) {
     console.error("Error calculating expected vs submitted hours:", error);
     res.status(500).json({ error: "Internal Server Error" });
+  }
+};
+export const createUserRate = async (req, res) => {
+  const { userId, effective_from, hourly_rate } = req.body;
+
+  if (!userId || !effective_from || hourly_rate == null) {
+    return res.status(400).json({ error: "userId, effective_from and hourly_rate are required" });
+  }
+
+  const rate = Number(hourly_rate);
+  if (Number.isNaN(rate) || rate < 0) {
+    return res.status(400).json({ error: "hourly_rate must be a non-negative number" });
+  }
+
+  try {
+    // Insert; if that (user_id, effective_from) exists, update it.
+    await sequelize.query(
+      `
+      INSERT INTO kimai2_user_rates (user_id, effective_from, hourly_rate)
+      VALUES (:userId, :effective_from, :hourly_rate)
+      ON DUPLICATE KEY UPDATE hourly_rate = VALUES(hourly_rate)
+      `,
+      { replacements: { userId, effective_from, hourly_rate: rate } }
+    );
+
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Error creating user rate:", err);
+    return res.status(500).json({ error: "Database insert failed" });
   }
 };
 
